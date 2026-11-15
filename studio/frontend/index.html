@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Монтажная</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><div class="logo"></div>Монтажная</div>
+  <div class="project-name" id="pname">Проект не выбран</div>
+  <div class="chips" id="chips"></div>
+</header>
+<div class="layout">
+  <nav class="side" id="nav">
+    <button data-page="projects"><span class="num">≡</span>Проекты</button>
+    <div class="sep"></div>
+    <button data-page="sources"><span class="num">1</span>Исходники</button>
+    <button data-page="cleanup"><span class="num">2</span>Чистка</button>
+    <button data-page="montage"><span class="num">3</span>Монтаж</button>
+    <button data-page="render"><span class="num">4</span>Рендер</button>
+    <div class="sep"></div>
+    <button data-page="styles"><span class="num">★</span>Референсы и стили</button>
+    <button data-page="rules"><span class="num">✎</span>Мои правила</button>
+  </nav>
+  <main id="main"></main>
+</div>
+<dialog id="dlg"><div id="dlgBody"></div><div class="row" style="justify-content:flex-end;margin-top:14px" id="dlgBtns"></div></dialog>
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>

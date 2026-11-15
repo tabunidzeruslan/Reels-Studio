@@ -63,9 +63,19 @@ def save(style: dict) -> dict:
 
 # ---------------------------------------------------------------- измерения
 def scenes(path: str) -> list[float]:
+    import os
+    import shutil
+    import tempfile
     from scenedetect import ContentDetector, detect
-    sc = detect(path, ContentDetector(threshold=27.0, min_scene_len=6), show_progress=False)
-    return [round(s[0].get_seconds(), 3) for s in sc]
+    src, tmp = path, None
+    if not path.isascii():   # OpenCV на Windows не открывает пути с кириллицей — работаем с временной копией
+        tmp = os.path.join(tempfile.gettempdir(), "mt_scene" + Path(path).suffix)
+        shutil.copy(path, tmp); src = tmp
+    try:
+        sc = detect(src, ContentDetector(threshold=27.0, min_scene_len=6), show_progress=False)
+    finally:
+        if tmp: os.remove(tmp)
+    return [round(s[0].get_seconds(), 3) for s in sc[1:]]   # начало 2-го и следующих планов = склейки
 
 
 def _rms_db(wav: str, t0: float, t1: float, a: np.ndarray, sr: int) -> float:

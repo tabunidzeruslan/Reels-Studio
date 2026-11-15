@@ -23,26 +23,34 @@ W, H, FPS = 1080, 1920, 30
 # ================================================================ подготовка исходников
 def face_center(path: str, samples: int = 14) -> tuple[float, float] | None:
     """Медианный центр лица (доли кадра) по нескольким кадрам. OpenCV Haar."""
+    # OpenCV на Windows не открывает пути с кириллицей: каскад копируем во временную папку,
+    # кадры достаём через ffmpeg (сырые серые пиксели в pipe)
+    import shutil
+    import subprocess
+
     import cv2
-    cap = cv2.VideoCapture(path)
-    n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-    if n <= 0:
-        return None
-    det = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    import numpy as np
+    from .ff import NO_WINDOW
+    casc = Path(tempfile.gettempdir()) / "mt_haar_face.xml"
+    if not casc.exists():
+        shutil.copy(cv2.data.haarcascades + "haarcascade_frontalface_default.xml", casc)
+    det = cv2.CascadeClassifier(str(casc))
+    info = cs.probe(path)
+    D, w0, h0 = info["duration"], info["width"], info["height"]
+    sc = 640 / max(w0, h0)
+    gw, gh = int(w0 * sc) // 2 * 2, int(h0 * sc) // 2 * 2
     xs, ys = [], []
     for k in range(samples):
-        cap.set(cv2.CAP_PROP_POS_FRAMES, int(n * (k + 0.5) / samples))
-        ok, fr = cap.read()
-        if not ok:
+        t = D * (k + 0.5) / samples
+        r = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{t:.2f}", "-i", path, "-frames:v", "1", "-vf", f"scale={gw}:{gh}",
+                            "-f", "rawvideo", "-pix_fmt", "gray", "-"], capture_output=True, creationflags=NO_WINDOW)
+        if len(r.stdout) != gw * gh:
             continue
-        h, w = fr.shape[:2]
-        sc = 640 / max(h, w)
-        g = cv2.cvtColor(cv2.resize(fr, (int(w * sc), int(h * sc))), cv2.COLOR_BGR2GRAY)
-        faces = det.detectMultiScale(g, 1.15, 5, minSize=(int(40 * 640 / 1080), int(40 * 640 / 1080)))
+        g = np.frombuffer(r.stdout, np.uint8).reshape(gh, gw)
+        faces = det.detectMultiScale(g, 1.15, 5, minSize=(24, 24))
         if len(faces):
             x, y, fw, fh = max(faces, key=lambda f: f[2] * f[3])
-            xs.append((x + fw / 2) / g.shape[1]); ys.append((y + fh / 2) / g.shape[0])
-    cap.release()
+            xs.append((x + fw / 2) / gw); ys.append((y + fh / 2) / gh)
     if not xs:
         return None
     return statistics.median(xs), statistics.median(ys)
@@ -105,7 +113,8 @@ def sentences(words: list[dict]) -> list[dict]:
 
 def hook_candidates(words: list[dict], top: int = 3) -> list[dict]:
     res = []
-    for s in sentences(words):
+    ss = sentences(words)
+    for s in ss:
         t = s["text"].lower()
         sc = 0.0
         if 4 <= s["n"] <= 14: sc += 2
@@ -114,6 +123,7 @@ def hook_candidates(words: list[dict], top: int = 3) -> list[dict]:
         if "?" in t or "!" in t: sc += 1.5
         sc += 1.5 * sum(1 for k in HOOK_WORDS if k in t)
         if s["idx"] == 0: sc -= 1.5          # уже стоит в начале
+        if s["idx"] == len(ss) - 1 and len(ss) > 2: sc -= 1.5   # концовка (часто CTA) — не хук
         if s["end"] - s["start"] > 6: sc -= 2
         res.append(dict(s, score=round(sc, 2)))
     res.sort(key=lambda x: -x["score"])
@@ -189,7 +199,7 @@ def render_card(item: dict, out: Path, accent: str = "#FFE14D") -> Path:
     from PIL import Image, ImageDraw, ImageFilter
     kind, text = item["kind"], item["text"]
     if kind == "number":
-        font, fg, bg, pad, rad = _font("UnboundedExtraBold.ttf", 120), accent, (16, 16, 22, 225), 48, 40
+        font, fg, bg, pad, rad = _font("UnboundedExtraBold.ttf", 100), accent, (16, 16, 22, 225), 48, 40
     elif kind == "cta":
         font, fg, bg, pad, rad = _font("MontserratBlack.ttf", 68), "#111111", accent, 40, 60
         text = text + "  →"
@@ -200,7 +210,7 @@ def render_card(item: dict, out: Path, accent: str = "#FFE14D") -> Path:
     words, lines, cur = text.split(), [], ""
     for wd in words:
         trial = (cur + " " + wd).strip()
-        if d.textlength(trial, font=font) > 860 and cur:
+        if d.textlength(trial, font=font) > 780 and cur:
             lines.append(cur); cur = wd
         else:
             cur = trial
