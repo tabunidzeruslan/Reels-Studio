@@ -6,7 +6,9 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from fastapi import Body, FastAPI, HTTPException
+import json
+
+from fastapi import Body, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -15,6 +17,15 @@ from .config import CAPTIONS_DIR, FRONTEND, KIT_DIR, OUTPUT, WORK
 from .ff import jdump, jload
 
 app = FastAPI(title="Монтажная")
+
+
+@app.middleware("http")
+async def _no_cache(request, call_next):
+    """Интерфейс всегда свежий: после обновления программы браузер не держит старые app.js/styles.css."""
+    resp = await call_next(request)
+    if request.url.path.startswith(("/static", "/cs/")) or request.url.path == "/":
+        resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 @app.exception_handler(Exception)
@@ -101,6 +112,67 @@ def scan(body: dict = Body(...)):
     if not sources.is_allowed(path):
         return JSONResponse({"need_permission": True, "path": os.path.abspath(path)}, status_code=403)
     return sources.scan(path)
+
+
+def _tk(code: str) -> str:
+    """Системное окно Windows (tkinter в отдельном процессе, поверх всех окон)."""
+    import sys as _s
+    pre = "import tkinter as tk; from tkinter import filedialog; r=tk.Tk(); r.withdraw(); r.attributes('-topmost', True); "
+    r = subprocess.run([_s.executable, "-c", pre + code], capture_output=True, text=True, encoding="utf-8",
+                       stdin=subprocess.DEVNULL)
+    return r.stdout.strip()
+
+
+def _item(path: str) -> dict:
+    p = Path(path)
+    it = {"path": str(p), "name": p.name, "size": p.stat().st_size}
+    try:
+        i = cs.probe(str(p)); it.update(width=i["width"], height=i["height"], fps=i["fps"], duration=round(i["duration"], 2), hdr=i["hdr"])
+    except Exception as e:
+        it["error"] = str(e)
+    return it
+
+
+@app.post("/api/sources/pick-folder")
+def pick_folder():
+    """Выбор папки в окне Windows: сам выбор — это разрешение на чтение этой папки."""
+    path = _tk("print(filedialog.askdirectory(title='Папка с исходниками'))")
+    if not path:
+        return {"cancelled": True}
+    path = os.path.abspath(path)
+    sources.allow(path)
+    return {"path": path, "items": sources.scan(path)}
+
+
+@app.post("/api/sources/pick-files")
+def pick_files():
+    out = _tk("import json; print(json.dumps(list(filedialog.askopenfilenames(title='Видео для ролика', "
+              "filetypes=[('Видео','*.mp4 *.mov *.m4v *.mkv *.webm *.avi *.mts'),('Все файлы','*.*')]))))")
+    try:
+        files = json.loads(out or "[]")
+    except ValueError:
+        files = []
+    if not files:
+        return {"cancelled": True}
+    for d in {os.path.dirname(os.path.abspath(f)) for f in files}:
+        sources.allow(d)
+    return {"items": [_item(os.path.abspath(f)) for f in files]}
+
+
+@app.post("/api/sources/upload")
+async def upload(file: UploadFile = File(...)):
+    """Перетаскивание: браузер не сообщает путь, поэтому кладём копию в work\\_uploads (исходник не трогаем)."""
+    from .config import VIDEO_EXT
+    ext = Path(file.filename or "video.mp4").suffix.lower()
+    if ext not in VIDEO_EXT:
+        raise ValueError(f"Формат {ext} не поддерживается")
+    up = WORK / "_uploads"; up.mkdir(exist_ok=True)
+    dst = cs.cs_render.unique_path(up / Path(file.filename).name)
+    with open(dst, "wb") as f:
+        while chunk := await file.read(1 << 20):
+            f.write(chunk)
+    sources.allow(str(up))
+    return _item(str(dst))
 
 
 @app.get("/api/thumb")

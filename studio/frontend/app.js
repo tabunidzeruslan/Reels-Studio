@@ -104,9 +104,11 @@ async function scanFolder(path) {
 async function pgSources() {
   const allowed = await api('/api/sources/allowed');
   const sel = [...(S.p.sources || [])];
-  main.innerHTML = `<div class="page"><h1>Исходники</h1><p class="sub">Папка с видео. Выберите один или несколько клипов, порядок — по клику.</p>
-    <div class="row"><input type="text" id="folder" class="grow" placeholder="D:\\Видео\\Съёмка 15.11" value="${esc(localStorage.getItem('mt_folder') || '')}">
-      <button class="btn" id="scan">Открыть папку</button>
+  main.innerHTML = `<div class="page"><h1>Исходники</h1><p class="sub">Добавьте видео: выберите файлы, папку или просто перетащите видео в окно. Порядок клипов — по клику.</p>
+    <div class="drop" id="drop"><div class="row" style="justify-content:center"><button class="btn primary" id="pickFiles">🎬 Выбрать видео…</button><button class="btn" id="pickFolder">📁 Выбрать папку…</button></div>
+      <div class="small muted" style="margin-top:8px">или перетащите файлы сюда (копия ляжет в D:\\Монтаж\\work\\_uploads, оригинал не трогается)</div><div id="upJob" class="small"></div></div>
+    <div class="row" style="margin-top:12px"><input type="text" id="folder" class="grow" placeholder="или путь к папке: D:\\Видео\\Съёмка 15.11" value="${esc(localStorage.getItem('mt_folder') || '')}">
+      <button class="btn" id="scan">Открыть путь</button>
       <select id="lang"><option value="ru">Русский</option><option value="uk">Українська</option><option value="en">English</option><option value="cs">Čeština</option><option value="auto">Авто</option></select></div>
     <div class="row small muted" style="margin:8px 0 14px">Разрешённые папки: ${allowed.map(a => `<a href="#" data-dir="${esc(a)}">${esc(a)}</a>`).join(' · ') || 'пока нет'}</div>
     <div class="grid" id="clips"></div>
@@ -133,6 +135,24 @@ async function pgSources() {
     if (r) { items = r; drawClips(); if (!r.length) toast('В папке нет видео'); }
   };
   $('scan').onclick = () => open($('folder').value.trim());
+  const addItems = list => { for (const c of list) { if (!items.some(x => x.path === c.path)) items.push(c);
+    if (!c.error && !sel.some(s => s.path === c.path)) sel.push({ path: c.path, name: c.name, duration: c.duration, width: c.width, height: c.height }); }
+    drawClips(); drawSel(); };
+  $('pickFiles').onclick = async () => { toast('Окно выбора файлов открылось (может быть за браузером)'); const r = await api('/api/sources/pick-files', { json: {} }).catch(e => toast(e.message)); if (r?.items) addItems(r.items); };
+  $('pickFolder').onclick = async () => { toast('Окно выбора папки открылось (может быть за браузером)'); const r = await api('/api/sources/pick-folder', { json: {} }).catch(e => toast(e.message));
+    if (r?.items) { items = r.items; localStorage.setItem('mt_folder', r.path); $('folder').value = r.path; drawClips(); if (!r.items.length) toast('В папке нет видео'); } };
+  const dz = $('drop');
+  dz.ondragover = e => { e.preventDefault(); dz.classList.add('over'); };
+  dz.ondragleave = () => dz.classList.remove('over');
+  dz.ondrop = async e => { e.preventDefault(); dz.classList.remove('over');
+    for (const f of e.dataTransfer.files) {
+      $('upJob').textContent = `Копирую ${f.name}…`;
+      const fd = new FormData(); fd.append('file', f);
+      const r = await fetch('/api/sources/upload', { method: 'POST', body: fd }); const d = await r.json();
+      if (!r.ok) toast(d.detail || 'Не удалось'); else addItems([d]);
+    }
+    $('upJob').textContent = ''; };
+  document.body.ondragover = e => e.preventDefault(); document.body.ondrop = e => e.preventDefault();
   main.querySelectorAll('[data-dir]').forEach(a => a.onclick = e => { e.preventDefault(); open(a.dataset.dir); });
   drawSel();
   if (sel.length) { const dir = sel[0].path.replace(/[\\/][^\\/]+$/, ''); if (allowed.some(a => dir.toLowerCase().startsWith(a.toLowerCase()))) open(dir); }

@@ -67,6 +67,9 @@ textarea { width: 100%; resize: vertical; font-family: Consolas, monospace; font
 .clip.sel { outline: 2px solid var(--accent); }
 .clip .order { position: absolute; top: 8px; left: 8px; background: var(--accent); border-radius: 99px; width: 24px; height: 24px; display: grid; place-items: center; font-weight: 700; }
 
+.drop { border: 2px dashed var(--line); border-radius: 14px; padding: 22px; text-align: center; background: var(--panel); }
+.drop.over { border-color: var(--accent); background: #241d3a; }
+
 /* прогресс */
 .progress { height: 6px; background: var(--panel2); border-radius: 99px; overflow: hidden; }
 .progress > div { height: 100%; background: linear-gradient(90deg, var(--accent), #ec4899); width: 0; transition: width .3s; }
