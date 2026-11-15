@@ -45,9 +45,11 @@ document.querySelectorAll('#nav button').forEach(b => b.onclick = () => go(b.dat
 function go(page) {
   S.page = page; stopPlayer();
   document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('active', b.dataset.page === page));
-  const needP = ['sources', 'cleanup', 'montage', 'render'].includes(page);
+  main.classList.toggle('full', page === 'agents');
+  stopAgentsView();
+  const needP = ['agents', 'sources', 'cleanup', 'montage', 'render'].includes(page);
   if (needP && !S.p) { main.innerHTML = `<div class="page"><h1>Сначала выберите проект</h1><p class="sub">Раздел «Проекты» → новый ролик или существующий.</p><button class="btn primary" id="toP">К проектам</button></div>`; $('toP').onclick = () => go('projects'); return; }
-  ({ projects: pgProjects, sources: pgSources, cleanup: pgCleanup, montage: pgMontage, render: pgRender, styles: pgStyles, rules: pgRules })[page]();
+  ({ agents: pgAgents, projects: pgProjects, sources: pgSources, cleanup: pgCleanup, montage: pgMontage, render: pgRender, styles: pgStyles, rules: pgRules })[page]();
 }
 async function openProject(pid) {
   S.pid = pid; S.p = await api(`/api/projects/${pid}`); S.words = null;
@@ -72,7 +74,7 @@ async function pgProjects() {
       <div class="row"><button class="btn sm" data-del="${p.id}">Удалить проект</button></div></div>`).join('') || '<p class="muted">Пока пусто. Создайте первый ролик.</p>'}</div></div>`;
   $('newP').onclick = async () => {
     const p = await api('/api/projects', { json: { title: $('newTitle').value.trim() || 'Новый ролик' } });
-    await openProject(p.id); go('sources');
+    await openProject(p.id); S.afterSources = 'agents'; go('sources');
   };
   main.querySelectorAll('.proj').forEach(c => c.onclick = async e => {
     if (e.target.dataset.del) {
@@ -82,8 +84,7 @@ async function pgProjects() {
       return;
     }
     await openProject(c.dataset.id);
-    const st = S.p.stages;
-    go(st.cleanup === 'done' ? 'montage' : st.transcribe === 'done' ? 'cleanup' : 'sources');
+    go(S.p.sources?.length ? 'agents' : 'sources');
   });
 }
 
@@ -110,7 +111,7 @@ async function pgSources() {
     <div class="row small muted" style="margin:8px 0 14px">Разрешённые папки: ${allowed.map(a => `<a href="#" data-dir="${esc(a)}">${esc(a)}</a>`).join(' · ') || 'пока нет'}</div>
     <div class="grid" id="clips"></div>
     <div class="card" style="margin-top:16px"><div class="row"><div class="grow"><b>В ролике:</b> <span id="selList"></span></div>
-      <button class="btn primary" id="prep">Подготовить и распознать →</button></div><div id="job" style="margin-top:10px"></div>
+      <button class="btn" id="prep">Только подготовить и распознать</button><button class="btn primary" id="toAg">В монтажку с агентами →</button></div><div id="job" style="margin-top:10px"></div>
       <p class="hint">Подготовка: копия 1080×1920, 30 к/с, горизонталь кадрируется по лицу. Затем распознавание речи (whisper Captions Studio) и поиск правок.</p></div></div>`;
   $('lang').value = S.p.lang || 'ru';
   let items = [];
@@ -135,6 +136,12 @@ async function pgSources() {
   main.querySelectorAll('[data-dir]').forEach(a => a.onclick = e => { e.preventDefault(); open(a.dataset.dir); });
   drawSel();
   if (sel.length) { const dir = sel[0].path.replace(/[\\/][^\\/]+$/, ''); if (allowed.some(a => dir.toLowerCase().startsWith(a.toLowerCase()))) open(dir); }
+  $('toAg').onclick = async () => {
+    if (!sel.length) return toast('Выберите хотя бы один клип');
+    const changed = JSON.stringify(sel.map(s => s.path)) !== JSON.stringify((S.p.sources || []).map(s => s.path));
+    if (changed || $('lang').value !== S.p.lang) await saveP({ sources: sel, lang: $('lang').value });
+    go('agents');
+  };
   $('prep').onclick = async () => {
     if (!sel.length) return toast('Выберите хотя бы один клип');
     await saveP({ sources: sel, lang: $('lang').value });
@@ -378,14 +385,17 @@ async function reviewMotion() {
   return true;
 }
 
-async function doRender(kind) {
-  if (!(await reviewMotion())) return toast('Рендер отменён: не все анимации согласованы');
+async function doRender(kind, opt = {}) {
+  if (!(await reviewMotion())) { toast('Рендер отменён: не все анимации согласованы'); return null; }
   const sc = scene();
   const job = await api(`/api/projects/${S.pid}/render`, { json: { kind, ass: E.toASS(sc), emojis: E.emojiOverlays(sc) } });
   toast(kind === 'final' ? 'Финал поставлен в очередь' : 'Превью поставлено в очередь');
-  const el = $('job');
-  try { const r = await pollJob(job, el); toast('Готово: ' + r.file); await openProject(S.pid); if (S.page === 'render') pgRender(); else go('render'); }
-  catch (e) { toast(e.message); }
+  const el = opt.el || $('job');
+  try {
+    const r = await pollJob(job, el); toast('Готово: ' + r.file); await openProject(S.pid);
+    if (!opt.stay) { if (S.page === 'render') pgRender(); else go('render'); }
+    return r;
+  } catch (e) { toast(e.message); if (opt.stay) throw e; return null; }
 }
 
 function makePlayer() {
@@ -530,6 +540,293 @@ async function pgRules() {
   $('add').onclick = async () => { if (!$('note').value.trim()) return; const x = await api('/api/rules/add', { json: { note: $('note').value } });
     $('res').textContent = x.understood.length ? 'Понял: ' + x.understood.join('; ') : 'Записал в журнал (параметры не изменились).'; $('txt').value = x.text; $('note').value = ''; };
   $('save').onclick = async () => { try { await api('/api/rules', { method: 'PUT', json: { text: $('txt').value } }); $('st').textContent = 'Сохранено'; } catch (e) { $('st').textContent = e.message; } };
+}
+
+// ================================================================ ▶ Монтажка с агентами
+// Экран по образцу гайда: исходник + агенты слева, консоль и «Программа» 9:16 в центре, расшифровка, кадры и журнал справа,
+// таймлайн внизу. Агенты — настоящие этапы монтажа; команда «смонтируй рилс» запускает их по очереди.
+const AGENTS = [
+  { id: 'transcribe', name: 'Расшифровка', color: '#3fa7ff', panel: 'agTr', job: 'слова и тайминги' },
+  { id: 'writer', name: 'Сценарист', color: '#ffb020', panel: 'agTr', job: 'хук, пункты, чистка' },
+  { id: 'designer', name: 'Дизайнер', color: '#F05A28', panel: 'agFrames', job: 'карточки на словах' },
+  { id: 'subs', name: 'Субтитры', color: '#3bd67a', panel: 'agTl', job: 'фразы по 1–3 слова' },
+  { id: 'sound', name: 'Звук', color: '#c86bff', panel: 'agTl', job: 'голос, музыка, щелчки' },
+  { id: 'render', name: 'Рендер', color: '#F4EEE4', panel: 'agProg', job: 'сборка MP4' },
+];
+const ST_NAME = { wait: 'ждёт', work: 'работает', review: 'ждёт тебя', done: 'готово', error: 'ошибка' };
+let AG = null;   // состояние экрана
+
+function stopAgentsView() { if (AG) { AG.alive = false; clearInterval(AG.cursorTimer); cancelAnimationFrame(AG.raf); AG = null; } }
+
+async function agentSet(id, status, log, note) {
+  const st = await api(`/api/projects/${S.pid}/agents`, { json: { agent: id, ...(status ? { status } : {}), ...(log ? { log } : {}), ...(note != null ? { note } : {}) } });
+  if (AG) { AG.state = st; drawAgents(); drawLog(); }
+}
+
+async function pgAgents() {
+  main.innerHTML = `<div class="ag" id="ag">
+    <div class="agTop"><b>Монтажная</b><span class="agTabs"><span>Монтаж</span><span>Субтитры</span><span>Звук</span><span class="on">Агенты</span></span>
+      <span class="agProj">${esc(S.p.title)}</span><span class="grow"></span><span class="agDots" id="agDots"></span><button class="agBtn" id="agRenderBtn">Рендер…</button></div>
+    <section class="agP" id="agSrc"><h4><i></i>ИСХОДНИК <span id="agSrcMeta"></span></h4><div class="agSrcBox"><div class="agSrcVid"><video id="agSrcV" muted playsinline loop></video><div class="agFace" id="agFace"></div></div><div class="agMeta" id="agMeta"></div></div></section>
+    <section class="agP" id="agList"><h4><i></i>АГЕНТЫ CLAUDE <span>${AGENTS.length}</span></h4><div id="agRows"></div></section>
+    <section class="agP" id="agCC"><h4><i></i>CLAUDE CODE <span>~/${esc(S.p.id)}</span></h4><div class="agCon" id="agCon"></div>
+      <div class="agIn"><span>›</span><input id="agCmd" placeholder="смонтируй рилс" autocomplete="off"><button class="agBtn" id="agGo">Enter</button></div></section>
+    <section class="agP" id="agProg"><h4><i></i>ПРОГРАММА <span id="agProgMeta">9:16</span></h4><div class="agProgBox"><video id="agProgV" playsinline controls></video><div class="agBar" id="agBar"><div></div><span></span></div></div></section>
+    <section class="agP" id="agTr"><h4><i></i>РАСШИФРОВКА <span id="agTrMeta"></span></h4><div class="agTrList" id="agTrList"></div></section>
+    <section class="agP" id="agFrames"><h4><i></i>КАДРЫ <span id="agFrMeta"></span></h4><div class="agFrGrid" id="agFrGrid"></div></section>
+    <section class="agP" id="agLog"><h4><i></i>ЖУРНАЛ <span>агенты</span></h4><div class="agLogList" id="agLogList"></div></section>
+    <section class="agP" id="agTl"><h4><i></i>ТАЙМЛАЙН <span id="agTc">00:00:00</span></h4><canvas id="agCanvas"></canvas></section>
+    <div class="agCursors" id="agCursors"></div></div>`;
+  AG = { alive: true, state: { agents: {}, log: [] }, frames: [], wave: [], words: null, running: false };
+  $('agGo').onclick = () => runCommand($('agCmd').value || 'смонтируй рилс');
+  $('agCmd').onkeydown = e => { if (e.key === 'Enter') runCommand($('agCmd').value || 'смонтируй рилс'); };
+  $('agRenderBtn').onclick = () => runCommand('финал');
+  makeCursors();
+  await refreshAgents();
+  conLine('Монтажная готова. Команды: «смонтируй рилс», «финал», «сначала» (сбросить агентов).', 'muted');
+  if (!S.p.sources?.length) conLine('Нет исходников: выбери клипы в разделе «Исходники».', 'warn');
+  const loop = () => { if (!AG?.alive) return; drawTimeline2(); AG.raf = requestAnimationFrame(loop); };
+  AG.raf = requestAnimationFrame(loop);
+}
+
+async function refreshAgents() {
+  if (!AG) return;
+  S.p = await api(`/api/projects/${S.pid}`);
+  const [st, words, frames, wave] = await Promise.all([
+    api(`/api/projects/${S.pid}/agents`),
+    S.p.stages.transcribe === 'done' ? api(`/api/projects/${S.pid}/words`) : null,
+    api(`/api/projects/${S.pid}/frames?n=12`).catch(() => []),
+    api(`/api/projects/${S.pid}/wave?n=700`).catch(() => []),
+  ]);
+  if (!AG) return;
+  for (const k of Object.keys(AG)) if (k.startsWith('img')) delete AG[k];
+  Object.assign(AG, { state: st, words, frames, wave });
+  // исходник
+  const pd = `/api/projects/${S.pid}/file/`;
+  const sv = $('agSrcV');
+  const srcUrl = S.p.stages.prepare === 'done' ? pd + 'raw.mp4' : (S.p.sources?.[0] ? media(S.p.sources[0].path) : '');
+  if (srcUrl && sv.dataset.src !== srcUrl) { sv.src = srcUrl; sv.dataset.src = srcUrl; sv.play().catch(() => {}); }
+  fetch(pd + 'face.json').then(r => r.ok ? r.json() : null).then(f => {
+    const el = $('agFace'); if (!el) return; el.hidden = !f;
+    if (f) { el.style.left = `${f.cx * 100 - 17}%`; el.style.top = `${f.cy * 100 - 10}%`; }
+  }).catch(() => {});
+  const s0 = S.p.sources?.[0];
+  const W = words?.raw || [];
+  $('agMeta').innerHTML = [['клипов', S.p.sources?.length || 0], ['файл', s0 ? esc(s0.name) : '—'], ['кадр', s0?.width ? `${s0.width}×${s0.height}` : '—'],
+    ['длина', s0?.duration ? fmt(S.p.sources.reduce((a, s) => a + (s.duration || 0), 0)) : '—'], ['слов', W.length || '—'], ['язык', words?.language || S.p.lang]]
+    .map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join('');
+  // программа
+  const last = [...(S.p.renders || [])].reverse()[0];
+  const pv = $('agProgV');
+  const progUrl = last ? media(last.file) + `&v=${last.time}` : S.p.stages.cleanup === 'done' ? pd + 'clean.mp4' : '';
+  if (progUrl && pv.dataset.src !== progUrl) { pv.src = progUrl; pv.dataset.src = progUrl; }
+  $('agProgMeta').textContent = last ? `${last.kind === 'final' ? 'финал' : 'превью'} · ${fmt(last.duration)}` : S.p.stages.cleanup === 'done' ? 'чистое видео' : '9:16';
+  drawAgents(); drawTranscript(); drawFrames(); drawLog();
+}
+
+function drawAgents() {
+  if (!AG) return;
+  const a = AG.state.agents || {};
+  $('agRows').innerHTML = AGENTS.map((g, i) => { const s = a[g.id]?.status || 'wait';
+    return `<div class="agRow"><span class="agN" style="background:${g.color}">${i + 1}</span><div class="grow"><b>${g.name}</b><div class="agNote">${esc(a[g.id]?.note || g.job)}</div></div>
+      <span class="agSt ${s}">${ST_NAME[s]}${s === 'done' ? ' ✓' : ''}</span></div>`; }).join('');
+  $('agDots').innerHTML = AGENTS.map(g => `<i style="background:${g.color};opacity:${(a[g.id]?.status || 'wait') === 'wait' ? .35 : 1}">${g.name[0]}</i>`).join('');
+}
+
+function sentencesOf(words) {
+  const out = []; let cur = [];
+  words.forEach((w, k) => { if (cur.length && (w.start - words[k - 1].end > 0.6 || /[.!?…]$/.test(words[k - 1].text))) { out.push(cur); cur = []; } cur.push(w); });
+  if (cur.length) out.push(cur);
+  return out;
+}
+function drawTranscript() {
+  const w = AG.words; const list = $('agTrList');
+  if (!w) { list.innerHTML = '<div class="agEmpty">Расшифровка появится здесь</div>'; $('agTrMeta').textContent = ''; return; }
+  const words = w.clean || w.raw;
+  const sents = sentencesOf(words);
+  const hk = S.p.hook;
+  let n = 0;
+  list.innerHTML = sents.map(s => { const txt = s.map(x => x.text).join(' ');
+    const isHook = hk && Math.abs(s[0].start - hk.start) < 0.05;
+    if (!isHook) n++;
+    return `<div class="agLine ${isHook ? 'hook' : ''}"><span class="agTc">${fmt(s[0].start)}</span><span class="agNum">${isHook ? 'ХУК' : String(n).padStart(2, '0')}</span><span>${esc(txt)}</span></div>`; }).join('');
+  $('agTrMeta').textContent = `${words.length} слов · ${sents.length} пунктов`;
+}
+function drawFrames() {
+  $('agFrGrid').innerHTML = AG.frames.map((f, i) => `<div class="agFr" data-t="${f.t}"><img src="${f.url}"><span>${fmt(f.t)}</span></div>`).join('') || '<div class="agEmpty">Кадры появятся после подготовки</div>';
+  $('agFrMeta').textContent = AG.frames.length ? `${AG.frames.length} / ${AG.frames.length}` : '';
+}
+function drawLog() {
+  const L = AG?.state.log || [];
+  const el = $('agLogList'); if (!el) return;
+  el.innerHTML = L.slice(-60).map(x => { const g = AGENTS.find(a => a.id === x.agent);
+    return `<div><span class="agTc">${new Date(x.t * 1000).toLocaleTimeString('ru')}</span> <b style="color:${g?.color || '#aaa'}">${g?.name || 'Claude'}</b> ${esc(x.text)}</div>`; }).join('');
+  el.scrollTop = el.scrollHeight;
+}
+function conLine(text, cls = '') {
+  const c = $('agCon'); if (!c) return;
+  const d = document.createElement('div'); d.className = cls; d.textContent = text; c.append(d); c.scrollTop = c.scrollHeight;
+}
+async function typeCmd(text) {
+  const c = $('agCon'); const d = document.createElement('div'); d.className = 'cmd'; c.append(d);
+  for (let i = 1; i <= text.length; i++) { d.textContent = '› ' + text.slice(0, i); await new Promise(r => setTimeout(r, 35)); }
+}
+function setBar(p, label) { const b = $('agBar'); if (!b) return; b.style.display = p == null ? 'none' : 'block'; if (p != null) { b.firstElementChild.style.width = `${p * 100}%`; b.lastElementChild.textContent = label || `${Math.round(p * 100)}%`; } }
+
+async function pollAgent(job, id, label) {
+  while (true) {
+    const j = await api(`/api/jobs/${job.id}`);
+    if (AG) { const a = AG.state.agents[id] || (AG.state.agents[id] = {}); a.note = `${label}: ${Math.round(j.progress * 100)}% · ${j.message || ''}`; drawAgents(); }
+    if (j.status === 'done') return j.result;
+    if (j.status === 'error') throw new Error(j.error);
+    await new Promise(r => setTimeout(r, 700));
+  }
+}
+
+async function runCommand(cmd) {
+  if (!AG || AG.running) return;
+  cmd = cmd.trim().toLowerCase(); $('agCmd').value = '';
+  await typeCmd(cmd);
+  if (cmd.includes('снач')) { await api(`/api/projects/${S.pid}/agents`, { json: { reset: true } }); conLine('Агенты сброшены.'); return refreshAgents(); }
+  if (!S.p.sources?.length) { conLine('Сначала выбери клипы в «Исходниках».', 'warn'); return; }
+  AG.running = true;
+  const final = cmd.includes('финал');
+  let cur = null;
+  try {
+    // 1. Расшифровка
+    cur = 'transcribe';
+    if (S.p.stages.transcribe !== 'done') {
+      await agentSet(cur, 'work', 'Готовлю копию 1080×1920, ищу лицо, расшифровываю речь локально (whisper).');
+      const r = await pollAgent(await api(`/api/projects/${S.pid}/prepare`, { json: {} }), cur, 'расшифровка');
+      await agentSet(cur, 'done', `Распознано ${r.words} слов, найдено ${r.edits} мест для чистки.`, `${r.words} слов`);
+    } else if (AG.state.agents.transcribe?.status !== 'done') await agentSet(cur, 'done', 'Расшифровка уже есть.', 'готова');
+    await refreshAgents();
+    // 2. Сценарист: чистка + хук + пункты
+    cur = 'writer';
+    if (S.p.stages.cleanup !== 'done') {
+      await agentSet(cur, 'work', 'Убираю паузы, паразиты, дубли и фальстарты (твои ✗ из «Чистки» не трогаю).');
+      const edits = S.p.edits.map(e => ({ ...e, accepted: e.accepted === false ? false : true }));
+      await saveP({ edits });
+      const r = await pollAgent(await api(`/api/projects/${S.pid}/apply_cuts`, { json: {} }), cur, 'склейка');
+      await refreshAgents();
+      const cut = edits.filter(e => e.accepted).reduce((s, e) => s + e.end - e.start, 0);
+      await agentSet(cur, null, `Вырезал ${cut.toFixed(1)} с (${edits.filter(e => e.accepted).length} правок), ролик ${fmt(r.duration)}.`);
+      await agentSet(cur, 'done', S.p.hook ? `Хук: «${S.p.hook.text}»` : 'Хук не нужен: сильная фраза уже в начале.', S.p.hook ? 'хук найден' : 'без хука');
+    } else if (AG.state.agents.writer?.status !== 'done') await agentSet(cur, 'done', S.p.hook ? `Хук: «${S.p.hook.text}»` : 'Чистка уже сделана.');
+    await refreshAgents();
+    // 3. Дизайнер: карточки + согласование
+    cur = 'designer';
+    const M = S.p.motion || [];
+    await agentSet(cur, 'work', M.length ? `Предлагаю ${M.length} анимаций: ${M.map(g => `«${g.text || g.name}» на ${fmt(g.t)}`).join(', ')}.` : 'На словах нет чисел, названий и призыва: карточки не нужны. Можно добавить в «Монтаже».');
+    if (M.some(g => g.accepted == null)) {
+      await agentSet(cur, 'review', 'Жду твоего решения по каждой анимации.', 'ждёт согласования');
+      await ensureEngine(); [S.presets, S.words] = await Promise.all([api('/api/presets'), api(`/api/projects/${S.pid}/words`)]); S.rules = (await api('/api/rules')).params;
+      if (!(await reviewMotion())) { await agentSet(cur, 'review', 'Согласование остановлено. Продолжу по команде.'); conLine('Остановлено на согласовании анимаций.', 'warn'); return; }
+    }
+    const acc = (S.p.motion || []).filter(g => g.accepted).length;
+    await agentSet(cur, 'done', `В ролике ${acc} анимаций, отклонено ${(S.p.motion || []).filter(g => g.accepted === false).length}.`, `${acc} на дорожке`);
+    // 4. Субтитры
+    cur = 'subs';
+    await agentSet(cur, 'work', 'Разбиваю речь на фразы движком Captions Studio.');
+    await ensureEngine(); [S.presets, S.words] = await Promise.all([api('/api/presets'), api(`/api/projects/${S.pid}/words`)]); S.rules = (await api('/api/rules')).params;
+    const ph = phrases(); const pr = S.presets.find(x => x.id === S.p.caption_preset);
+    await agentSet(cur, 'done', `${ph.length} фраз, стиль «${pr?.name || S.p.caption_preset}».`, `${ph.length} фраз`);
+    // 5. Звук
+    cur = 'sound';
+    await agentSet(cur, 'work', 'Выравниваю голос, кладу музыку с приглушением под речь.');
+    const sfx = (S.p.sfx !== false ? acc + (S.p.hook ? 1 : 0) : 0);
+    await agentSet(cur, 'done', `${S.p.music?.enabled ? `Музыка ${S.p.music.file} (${S.p.music.volume})` : 'Без музыки'}, ${sfx} щелчков, итог ${S.rules.lufs} LUFS.`, `${S.rules.lufs} LUFS`);
+    // 6. Рендер
+    cur = 'render';
+    await agentSet(cur, 'work', final ? 'Финал 1080×1920 (Instagram / TikTok / Facebook).' : 'Быстрое превью 720p.');
+    const job = { el: null };
+    const watcher = setInterval(async () => { const jl = (await api('/api/jobs')).filter(j => j.kind.startsWith('render') && j.status === 'running')[0]; if (jl) setBar(jl.progress); }, 600);
+    let r;
+    try { r = await doRender(final ? 'final' : 'preview', { el: document.createElement('div'), stay: true }); } finally { clearInterval(watcher); setBar(null); }
+    if (!r) throw new Error('рендер не запущен');
+    await agentSet(cur, 'done', `Готово: ${r.file}`, final ? 'финал готов' : 'превью готово');
+    await refreshAgents();
+    conLine(final ? 'Финал готов. Он в D:\\Монтаж\\output.' : 'Превью готово, играет в «Программе». Скажи «финал», когда всё устроит.', 'ok');
+    const pv = $('agProgV'); pv.currentTime = 0; pv.play().catch(() => {});
+  } catch (e) {
+    if (cur) await agentSet(cur, 'error', 'Ошибка: ' + e.message).catch(() => {});
+    conLine('Ошибка: ' + e.message, 'warn');
+  } finally { if (AG) AG.running = false; }
+}
+
+// ---- курсоры агентов: летают по своим панелям, пока агент работает
+function makeCursors() {
+  const box = $('agCursors');
+  const helpers = [];
+  AGENTS.forEach((g, i) => { for (let k = 2; k <= 3; k++) if (helpers.length < 10) helpers.push({ ...g, name: `${g.name} ${k}`, helper: true }); });
+  const all = [...AGENTS, ...helpers].slice(0, 16);
+  box.innerHTML = all.map((g, i) => `<div class="agCur ${g.helper ? 'h' : ''}" data-i="${i}" style="--c:${g.color}"><svg viewBox="0 0 16 16"><path d="M1 1l5 13 2-5 5-2z" fill="var(--c)" stroke="#000" stroke-width="1"/></svg><span>${g.name}</span></div>`).join('');
+  const els = [...box.children];
+  let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  AG.cursorTimer = setInterval(() => {
+    if (!AG?.alive) return;
+    const ag = AG.state.agents || {};
+    const host = $('ag').getBoundingClientRect();
+    els.forEach((el, i) => {
+      const g = all[i]; const s = ag[g.id]?.status;
+      const working = s === 'work' || (AG.running && s !== 'done' && !g.helper && false);
+      const idle = !working;
+      if (g.helper && !working) { el.style.opacity = 0; return; }
+      const panelId = idle ? 'agList' : g.panel;
+      const r = $(panelId)?.getBoundingClientRect(); if (!r) return;
+      if (idle) {   // в паузе — у своей строки в списке агентов, не закрывая текст
+        const row = $('agRows').children[AGENTS.indexOf(g)]?.getBoundingClientRect(); if (!row) return;
+        el.classList.add('idle'); el.style.opacity = .9; el.style.left = `${row.left - host.left - 2}px`; el.style.top = `${row.top - host.top + 12}px`; return;
+      }
+      if (rnd() < (g.helper ? 0.55 : 0.75)) {
+        el.classList.remove('idle'); el.style.opacity = 1;
+        const x = r.left - host.left + 20 + rnd() * (r.width - 120), y = r.top - host.top + 30 + rnd() * (r.height - 50);
+        el.style.left = `${x}px`; el.style.top = `${y}px`;
+        if (rnd() < 0.35) setTimeout(() => { const c = document.createElement('div'); c.className = 'agClick'; c.style.cssText = `left:${x}px;top:${y}px;border-color:${g.color}`; box.append(c); setTimeout(() => c.remove(), 500); }, 220);
+      }
+    });
+  }, 260);
+}
+
+// ---- таймлайн монтажки: Карточки, Субтитры, Видео, Голос, Звук + плейхед
+function drawTimeline2() {
+  const cv = $('agCanvas'); if (!cv) return;
+  const r = cv.getBoundingClientRect(); const dpr = devicePixelRatio || 1;
+  if (cv.width !== Math.round(r.width * dpr) || cv.height !== Math.round(r.height * dpr)) { cv.width = Math.round(r.width * dpr); cv.height = Math.round(r.height * dpr); }
+  const c = cv.getContext('2d'); c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const Wd = r.width, Hh = r.height; c.clearRect(0, 0, Wd, Hh);
+  const words = AG.words?.clean || AG.words?.raw || [];
+  const D = AG.words?.duration || (words.length ? words[words.length - 1].end + 0.5 : 10);
+  const L = 92, X = t => L + (Wd - L - 10) * t / Math.max(D, 0.1);
+  const rows = ['Карточки', 'Субтитры', 'Видео', 'Голос', 'Звук']; const rh = (Hh - 22) / rows.length;
+  c.font = '11px Segoe UI';
+  for (let i = 0; i <= Math.floor(D); i += Math.max(1, Math.round(D / 12))) { c.fillStyle = '#5c5650'; c.fillText(`${i}s`, X(i) + 2, 11); c.fillStyle = '#ffffff10'; c.fillRect(X(i), 14, 1, Hh); }
+  rows.forEach((n, i) => { c.fillStyle = '#8a8178'; c.fillText(`${String(i + 1).padStart(2, '0')}  ${n}`, 6, 22 + i * rh + rh / 2 + 4); });
+  const y = i => 18 + i * rh + 3, h = rh - 6;
+  const ag = AG.state.agents || {};
+  // карточки
+  if ((ag.designer?.status || 'wait') !== 'wait') for (const g of S.p.motion || []) { if (g.accepted === false) continue;
+    c.fillStyle = g.accepted ? '#F05A28' : '#7a4a2a'; c.fillRect(X(g.t), y(0), Math.max(6, X(g.t + g.dur) - X(g.t)), h);
+    c.fillStyle = '#0D0D0D'; c.fillText((g.text || g.name || '').slice(0, 14), X(g.t) + 4, y(0) + h / 2 + 4); }
+  // субтитры
+  if (['work', 'done'].includes(ag.subs?.status) || S.p.stages.cleanup === 'done') { c.fillStyle = '#3bd67a';
+    for (const w of words) c.fillRect(X(w.start), y(1) + h * 0.2, Math.max(2, X(w.end) - X(w.start) - 1), h * 0.6); }
+  // видео: кадры
+  const fr = AG.frames; if (fr.length) { const fw = (Wd - L - 10) / fr.length;
+    fr.forEach((f, i) => { let im = AG['img' + i]; if (!im) { im = AG['img' + i] = new Image(); im.src = f.url; } if (im.complete && im.naturalWidth) { const s = Math.min(fw, h * im.naturalWidth / im.naturalHeight); c.drawImage(im, L + i * fw, y(2), s, h); } }); }
+  // голос
+  const wv = AG.wave; if (wv.length) { c.fillStyle = '#c86bff'; const step = (Wd - L - 10) / wv.length;
+    wv.forEach((v, i) => { const hh = Math.max(1, v * h); c.fillRect(L + i * step, y(3) + (h - hh) / 2, Math.max(1, step - 0.5), hh); }); }
+  // звук: щелчки на графике и хуке
+  if (['work', 'done'].includes(ag.sound?.status)) { c.fillStyle = '#ffb020';
+    for (const g of (S.p.motion || []).filter(g => g.accepted)) { c.beginPath(); c.arc(X(g.t), y(4) + h / 2, 4, 0, 7); c.fill(); }
+    if (S.p.music?.enabled) { c.fillStyle = '#ffb02033'; c.fillRect(L, y(4) + h * 0.35, Wd - L - 10, h * 0.3); } }
+  // хук-метка
+  if (S.p.hook) { c.fillStyle = '#F05A28'; c.fillRect(X(S.p.hook.start), 14, Math.max(3, X(S.p.hook.end) - X(S.p.hook.start)), 3); }
+  // плейхед по «Программе»
+  const pv = $('agProgV'); const t = pv && !isNaN(pv.currentTime) ? pv.currentTime : 0;
+  c.fillStyle = '#F05A28'; c.fillRect(X(Math.min(t, D)) - 1, 14, 2, Hh);
+  const tc = $('agTc'); if (tc) tc.textContent = `00:00:${String(Math.floor(t)).padStart(2, '0')}:${String(Math.floor((t % 1) * 30)).padStart(2, '0')}`;
 }
 
 // ================================================================ старт

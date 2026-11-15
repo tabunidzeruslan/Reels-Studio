@@ -29,7 +29,7 @@ def new(title: str) -> dict:
          "sources": [], "lang": "ru", "style": "dynamic", "caption_preset": "01_hormozi", "caption_style": {},
          "stages": {s: "todo" for s in STAGES}, "edits": [], "hook": None, "motion": [], "punch": [],
          "music": {"file": "lofi_keys_84.mp3", "volume": 0.18, "enabled": True}, "sfx": True,
-         "phrases_override": None, "renders": []}
+         "phrases_override": None, "renders": [], "agents": {}}
     save(p)
     return p
 

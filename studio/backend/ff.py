@@ -1,4 +1,4 @@
-"""Запуск ffmpeg с прогрессом и мелкие помощники."""
+﻿"""Запуск ffmpeg с прогрессом и мелкие помощники."""
 from __future__ import annotations
 
 import json
@@ -9,7 +9,7 @@ NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def run(cmd: list[str], cwd: str | None = None) -> subprocess.CompletedProcess:
-    r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+    r = subprocess.run(cmd, cwd=cwd, capture_output=True, stdin=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace",
                        creationflags=NO_WINDOW)
     if r.returncode != 0:
         raise RuntimeError(f"{cmd[0]}: " + (r.stderr or r.stdout)[-800:])
@@ -20,7 +20,7 @@ def run_progress(cmd: list[str], duration: float, job=None, p0: float = 0.0, p1:
                  cwd: str | None = None) -> None:
     """ffmpeg с -progress pipe:1: двигает job.progress от p0 до p1."""
     cmd = cmd[:1] + ["-progress", "pipe:1", "-nostats"] + cmd[1:]
-    proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    proc = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                             encoding="utf-8", errors="replace", creationflags=NO_WINDOW)
     err: list[str] = []
     threading.Thread(target=lambda: err.extend(proc.stderr), daemon=True).start()

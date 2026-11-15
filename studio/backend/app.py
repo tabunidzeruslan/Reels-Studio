@@ -277,6 +277,80 @@ def card(pid: str, gid: str):
     return FileResponse(compose.render_card(g, d / f"{gid}.png"), headers={"Cache-Control": "no-store"})
 
 
+# ---------------------------------------------------------------- монтажка с агентами
+@app.get("/api/projects/{pid}/agents")
+def agents_state(pid: str):
+    p = projects.load(pid)
+    return {"agents": p.get("agents", {}), "log": jload(projects.pdir(pid) / "agents_log.json", [])}
+
+
+@app.post("/api/projects/{pid}/agents")
+def agents_update(pid: str, body: dict = Body(...)):
+    """{agent, status?, note?, log?} — статус агента и строка в журнал."""
+    import time as _t
+    p = projects.load(pid)
+    ag = p.setdefault("agents", {})
+    if body.get("reset"):
+        p["agents"] = ag = {}
+        jdump([], projects.pdir(pid) / "agents_log.json")
+    name = body.get("agent")
+    if name:
+        a = ag.setdefault(name, {"status": "wait"})
+        if "status" in body: a["status"] = body["status"]
+        if "note" in body: a["note"] = body["note"]
+    if body.get("log"):
+        lf = projects.pdir(pid) / "agents_log.json"
+        log = jload(lf, [])
+        log.append({"t": _t.time(), "agent": name or "", "text": body["log"]})
+        jdump(log[-400:], lf)
+    projects.save(p)
+    return agents_state(pid)
+
+
+@app.get("/api/projects/{pid}/frames")
+def frames(pid: str, n: int = 12):
+    """Кадры чистого видео (или исходника) для панели «Кадры» и дорожки «Видео»."""
+    pd = projects.pdir(pid)
+    src = pd / "clean.mp4" if (pd / "clean.mp4").exists() else pd / "raw.mp4"
+    if not src.exists():
+        return []
+    fd = pd / "frames"; fd.mkdir(exist_ok=True)
+    stamp = fd / f".{int(src.stat().st_mtime)}_{n}"
+    if not stamp.exists():
+        for f in fd.glob("*"): f.unlink()
+        D = compose.dur_of(str(src))
+        from .ff import run as _run
+        _run(["ffmpeg", "-y", "-v", "error", "-i", str(src), "-vf", f"fps={n}/{max(D, 0.1):.3f},scale=180:-2", "-q:v", "5",
+              "-frames:v", str(n), str(fd / "f_%02d.jpg")])
+        stamp.touch()
+    D = compose.dur_of(str(src))
+    files = sorted(fd.glob("f_*.jpg"))
+    return [{"url": f"/api/projects/{pid}/frame/{f.name}?v={int(src.stat().st_mtime)}", "t":round(D * (i + 0.5) / len(files), 2)} for i, f in enumerate(files)]
+
+
+@app.get("/api/projects/{pid}/frame/{name}")
+def frame_file(pid: str, name: str):
+    return FileResponse(projects.pdir(pid) / "frames" / Path(name).name)
+
+
+@app.get("/api/projects/{pid}/wave")
+def wave(pid: str, n: int = 600):
+    """Огибающая голоса (0..1) для дорожки «Голос»."""
+    import numpy as np
+    import subprocess as sp
+    pd = projects.pdir(pid)
+    src = pd / "clean.mp4" if (pd / "clean.mp4").exists() else pd / "raw.mp4"
+    if not src.exists():
+        return []
+    r = sp.run(["ffmpeg", "-v", "error", "-i", str(src), "-vn", "-ac", "1", "-ar", "8000", "-f", "s16le", "-"], capture_output=True)
+    a = np.frombuffer(r.stdout, np.int16).astype(np.float32) / 32768
+    if not len(a):
+        return []
+    k = max(1, len(a) // n)
+    env = np.sqrt(np.mean(a[: len(a) // k * k].reshape(-1, k) ** 2, axis=1))
+    return [round(float(x), 3) for x in env / (env.max() + 1e-9)]
+
+
 # ---------------------------------------------------------------- стили
 @app.get("/api/styles")
 def styles():

@@ -1,4 +1,4 @@
-"""Распознавание речи: faster-whisper из Captions Studio, локально и бесплатно.
+﻿"""Распознавание речи: faster-whisper из Captions Studio, локально и бесплатно.
 
 Запускаем её `backend.transcribe_worker` отдельным процессом в её .venv (модель large-v3-turbo уже в её models\\),
 сначала на видеокарте, при сбое — на процессоре. Её код не меняем. Затем применяем её словарь автозамен.
@@ -34,8 +34,11 @@ def transcribe(media: str, lang: str | None = "ru", model: str = "large-v3-turbo
         with open(jf, "w", encoding="utf-8") as f:
             json.dump({"audio": wav, "language": lang, "model": model, "device": dev, "out": out}, f)
         proc = subprocess.Popen([_py(), "-m", "backend.transcribe_worker", jf], cwd=str(CAPTIONS_DIR),
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
-                                errors="replace", creationflags=NO_WINDOW)
+                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                encoding="utf-8", errors="replace", creationflags=NO_WINDOW)
+        errbuf: list[str] = []
+        import threading
+        threading.Thread(target=lambda: errbuf.extend(proc.stderr), daemon=True).start()
         for line in proc.stdout:
             try:
                 m = json.loads(line)
@@ -43,8 +46,8 @@ def transcribe(media: str, lang: str | None = "ru", model: str = "large-v3-turbo
                     job.update(m.get("progress"), f"{m.get('message', '')} ({'видеокарта' if dev == 'cuda' else 'процессор'})")
             except ValueError:
                 pass
-        err = proc.stderr.read()
         proc.wait()
+        err = ''.join(errbuf)
         if proc.returncode == 0 and os.path.exists(out):
             break
         last = err[-600:]
