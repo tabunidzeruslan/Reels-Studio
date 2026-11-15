@@ -1,4 +1,4 @@
-// Монтажная — фронтенд. Субтитры рисует движок Captions Studio (/cs/engine.js): превью = рендер.
+﻿// Монтажная — фронтенд. Субтитры рисует движок Captions Studio (/cs/engine.js): превью = рендер.
 import * as E from '/cs/engine.js';
 
 const $ = id => document.getElementById(id);
@@ -41,7 +41,8 @@ async function pollJob(job, el) {
 }
 
 // ================================================================ навигация
-document.querySelectorAll('#nav button').forEach(b => b.onclick = () => go(b.dataset.page));
+document.querySelectorAll('#nav button[data-page]').forEach(b => b.onclick = () => go(b.dataset.page));
+$('moreBtn').onclick = () => { $('moreBox').hidden = !$('moreBox').hidden; };
 function go(page) {
   S.page = page; stopPlayer();
   document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('active', b.dataset.page === page));
@@ -49,7 +50,7 @@ function go(page) {
   stopAgentsView();
   const needP = ['agents', 'sources', 'cleanup', 'montage', 'render'].includes(page);
   if (needP && !S.p) { main.innerHTML = `<div class="page"><h1>Сначала выберите проект</h1><p class="sub">Раздел «Проекты» → новый ролик или существующий.</p><button class="btn primary" id="toP">К проектам</button></div>`; $('toP').onclick = () => go('projects'); return; }
-  ({ agents: pgAgents, projects: pgProjects, sources: pgSources, cleanup: pgCleanup, montage: pgMontage, render: pgRender, styles: pgStyles, rules: pgRules })[page]();
+  ({ home: pgHome, agents: pgAgents, projects: pgProjects, sources: pgSources, cleanup: pgCleanup, montage: pgMontage, render: pgRender, styles: pgStyles, rules: pgRules })[page]();
 }
 async function openProject(pid) {
   S.pid = pid; S.p = await api(`/api/projects/${pid}`); S.words = null;
@@ -74,7 +75,7 @@ async function pgProjects() {
       <div class="row"><button class="btn sm" data-del="${p.id}">Удалить проект</button></div></div>`).join('') || '<p class="muted">Пока пусто. Создайте первый ролик.</p>'}</div></div>`;
   $('newP').onclick = async () => {
     const p = await api('/api/projects', { json: { title: $('newTitle').value.trim() || 'Новый ролик' } });
-    await openProject(p.id); S.afterSources = 'agents'; go('sources');
+    await openProject(p.id); go('home');
   };
   main.querySelectorAll('.proj').forEach(c => c.onclick = async e => {
     if (e.target.dataset.del) {
@@ -84,7 +85,7 @@ async function pgProjects() {
       return;
     }
     await openProject(c.dataset.id);
-    go(S.p.sources?.length ? 'agents' : 'sources');
+    go('home');
   });
 }
 
@@ -656,6 +657,7 @@ async function refreshAgents() {
   if (!AG) return;
   for (const k of Object.keys(AG)) if (k.startsWith('img')) delete AG[k];
   Object.assign(AG, { state: st, words, frames, wave });
+  if (!$('ag')) { AG.onUpdate?.(); return; }
   // исходник
   const pd = `/api/projects/${S.pid}/file/`;
   const sv = $('agSrcV');
@@ -681,6 +683,7 @@ async function refreshAgents() {
 
 function drawAgents() {
   if (!AG) return;
+  if (!$('agRows')) { AG.onUpdate?.(); return; }
   const a = AG.state.agents || {};
   $('agRows').innerHTML = AGENTS.map((g, i) => { const s = a[g.id]?.status || 'wait';
     return `<div class="agRow"><span class="agN" style="background:${g.color}">${i + 1}</span><div class="grow"><b>${g.name}</b><div class="agNote">${esc(a[g.id]?.note || g.job)}</div></div>
@@ -719,14 +722,15 @@ function drawLog() {
   el.scrollTop = el.scrollHeight;
 }
 function conLine(text, cls = '') {
+  AG?.onLine?.(text, cls);
   const c = $('agCon'); if (!c) return;
   const d = document.createElement('div'); d.className = cls; d.textContent = text; c.append(d); c.scrollTop = c.scrollHeight;
 }
 async function typeCmd(text) {
-  const c = $('agCon'); const d = document.createElement('div'); d.className = 'cmd'; c.append(d);
+  const c = $('agCon'); if (!c) return; const d = document.createElement('div'); d.className = 'cmd'; c.append(d);
   for (let i = 1; i <= text.length; i++) { d.textContent = '› ' + text.slice(0, i); await new Promise(r => setTimeout(r, 35)); }
 }
-function setBar(p, label) { const b = $('agBar'); if (!b) return; b.style.display = p == null ? 'none' : 'block'; if (p != null) { b.firstElementChild.style.width = `${p * 100}%`; b.lastElementChild.textContent = label || `${Math.round(p * 100)}%`; } }
+function setBar(p, label) { AG?.onBar?.(p); const b = $('agBar'); if (!b) return; b.style.display = p == null ? 'none' : 'block'; if (p != null) { b.firstElementChild.style.width = `${p * 100}%`; b.lastElementChild.textContent = label || `${Math.round(p * 100)}%`; } }
 
 async function pollAgent(job, id, label) {
   while (true) {
@@ -740,7 +744,7 @@ async function pollAgent(job, id, label) {
 
 async function runCommand(cmd) {
   if (!AG || AG.running) return;
-  cmd = cmd.trim().toLowerCase(); $('agCmd').value = '';
+  cmd = cmd.trim().toLowerCase(); if ($('agCmd')) $('agCmd').value = '';
   await typeCmd(cmd);
   if (cmd.includes('снач')) { await api(`/api/projects/${S.pid}/agents`, { json: { reset: true } }); conLine('Агенты сброшены.'); return refreshAgents(); }
   if (!S.p.sources?.length) { conLine('Сначала выбери клипы в «Исходниках».', 'warn'); return; }
@@ -760,6 +764,8 @@ async function runCommand(cmd) {
     cur = 'writer';
     if (S.p.stages.cleanup !== 'done') {
       await agentSet(cur, 'work', 'Убираю паузы, паразиты, дубли и фальстарты (твои ✗ из «Чистки» не трогаю).');
+      S.p = await api(`/api/projects/${S.pid}`);
+      if (!S.p.edits?.length) await refindIfNeeded();
       const edits = S.p.edits.map(e => ({ ...e, accepted: e.accepted === false ? false : true }));
       await saveP({ edits });
       const r = await pollAgent(await api(`/api/projects/${S.pid}/apply_cuts`, { json: {} }), cur, 'склейка');
@@ -808,6 +814,8 @@ async function runCommand(cmd) {
     conLine('Ошибка: ' + e.message, 'warn');
   } finally { if (AG) AG.running = false; }
 }
+
+async function refindIfNeeded() { S.p = await api(`/api/projects/${S.pid}/refind`, { json: {} }); }
 
 // ---- курсоры агентов: летают по своим панелям, пока агент работает
 function makeCursors() {
@@ -886,12 +894,156 @@ function drawTimeline2() {
   const tc = $('agTc'); if (tc) tc.textContent = `00:00:${String(Math.floor(t)).padStart(2, '0')}:${String(Math.floor((t % 1) * 30)).padStart(2, '0')}`;
 }
 
+// ================================================================ ГЛАВНАЯ: три шага
+function uploadFile(file, onProgress) {
+  return new Promise((res, rej) => {
+    const x = new XMLHttpRequest(); const fd = new FormData(); fd.append('file', file);
+    x.open('POST', '/api/sources/upload');
+    x.upload.onprogress = e => e.lengthComputable && onProgress(e.loaded / e.total);
+    x.onload = () => { let d = {}; try { d = JSON.parse(x.responseText); } catch {} x.status < 300 ? res(d) : rej(new Error(d.detail || 'Не удалось загрузить')); };
+    x.onerror = () => rej(new Error('Сеть: не удалось загрузить'));
+    x.send(fd);
+  });
+}
+
+async function pgHome() {
+  if (S.pid) { try { S.p = await api(`/api/projects/${S.pid}`); } catch { S.pid = S.p = null; } }
+  const p = S.p;
+  const clips = p?.sources || [];
+  const last = p ? [...(p.renders || [])].reverse()[0] : null;
+  const fin = p ? [...(p.renders || [])].reverse().find(r => r.kind === 'final') : null;
+  main.innerHTML = `<div class="home">
+    <div class="row"><h1 class="grow" style="margin:0">${p ? esc(p.title) : 'Новый ролик'}</h1>
+      ${p ? '<button class="btn" id="hNew">+ Новый ролик</button>' : ''}</div>
+    <div class="step ${clips.length ? 'done' : 'on'}"><div class="sn">1</div><div class="grow">
+      <h2>Добавь видео</h2>
+      <div class="drop big" id="hDrop"><div>Перетащи видео сюда</div><div class="muted">или</div>
+        <button class="btn primary lg" id="hPick">Выбрать видео на компьютере</button>
+        <input type="file" id="hFile" accept="video/*,.mov,.mkv,.mts" multiple hidden><div id="hUp" class="small"></div></div>
+      <div class="clips">${clips.map((c, i) => `<div class="clipRow"><img src="/api/thumb?path=${encodeURIComponent(c.path)}"><div class="grow"><b>${esc(c.name)}</b><div class="small muted">${c.duration ? fmt(c.duration) : ''}</div></div><button class="btn sm" data-rm="${i}">Убрать</button></div>`).join('')}</div>
+    </div></div>
+    <div class="step ${clips.length ? (last ? 'done' : 'on') : ''}"><div class="sn">2</div><div class="grow">
+      <h2>Смонтировать</h2>
+      <p class="muted">Программа сама уберёт паузы и оговорки, найдёт сильную фразу для начала, сделает субтитры, музыку и звук. Если предложит анимации — спросит тебя.</p>
+      <div class="row"><button class="btn primary lg" id="hGo" ${clips.length ? '' : 'disabled'}>Смонтировать</button>
+        <button class="btn lg" id="hVoice" ${clips.length ? '' : 'disabled'}>🎙 Озвучить текст</button></div>
+      ${(p?.voiceovers || []).length ? `<div class="small muted" style="margin-top:6px">Озвучек в ролике: ${p.voiceovers.length}</div>` : ''}
+      <div class="agentsMini" id="hAg"></div><div class="progress" id="hBar" hidden><div></div></div><div id="hMsg" class="small"></div>
+    </div></div>
+    <div class="step ${last ? 'on' : ''}"><div class="sn">3</div><div class="grow">
+      <h2>Согласуй и забирай</h2>
+      ${last ? `<div class="result"><video src="${media(last.file)}&v=${last.time}" controls></video><div class="col">
+        <p class="small muted">${last.kind === 'final' ? 'Это финальная версия в хорошем качестве.' : 'Это черновик. Посмотри и отметь, что оставить.'}</p>
+        <div class="appr"><b>Музыка</b><div class="row"><select id="aMus"></select><button class="btn sm" id="aMusPlay">▶</button>
+          <label class="small"><input type="checkbox" id="aMusOn" ${p.music?.enabled ? 'checked' : ''}> включена</label></div>
+          <div class="small muted">${p.music?.why ? 'Подобрана ' + esc(p.music.why) : ''}</div><audio id="aAud"></audio></div>
+        <div class="appr"><b>Субтитры</b><select id="aCap"></select></div>
+        <div class="appr"><b>Анимации</b><div id="aAnim"></div></div>
+        <div class="row"><button class="btn lg" id="hRedo" hidden>Пересобрать черновик</button>
+          <button class="btn primary lg" id="hFinal">${fin ? 'Пересобрать финал' : 'Всё нравится — сделать финал'}</button></div>
+        ${fin ? `<div class="row"><button class="btn" data-rev="${esc(fin.file)}">Показать в папке</button><a class="btn" href="${media(fin.file)}" download>Скачать</a></div>` : ''}
+        </div></div>` : '<p class="muted">Здесь появится черновик ролика для согласования.</p>'}
+    </div></div>
+    ${(await api('/api/projects')).length > 1 ? `<div class="mine"><h3>Мои ролики</h3><div class="row" id="hMine"></div></div>` : ''}
+  </div>`;
+  // мои ролики
+  const all = await api('/api/projects');
+  if ($('hMine')) $('hMine').innerHTML = all.slice(0, 12).map(x => `<button class="btn sm ${x.id === S.pid ? 'on' : ''}" data-open="${x.id}">${esc(x.title)}</button>`).join('');
+  main.querySelectorAll('[data-open]').forEach(b => b.onclick = async () => { await openProject(b.dataset.open); pgHome(); });
+  main.querySelectorAll('[data-rev]').forEach(b => b.onclick = () => api('/api/reveal', { json: { path: b.dataset.rev } }));
+  if ($('hNew')) $('hNew').onclick = async () => { S.pid = S.p = null; try { localStorage.removeItem('mt_pid'); } catch {} $('pname').textContent = ''; pgHome(); };
+  // шаг 3: согласование (музыка, субтитры, анимации) → пересобрать черновик или финал
+  if ($('aMus')) {
+    const [mus, pres] = await Promise.all([api('/api/music'), api('/api/presets')]);
+    const showRedo = () => { $('hRedo').hidden = false; };
+    $('aMus').innerHTML = mus.map(m => `<option value="${esc(m.file)}">${esc(m.file.replace(/\.\w+$/, '').replace(/_/g, ' '))}</option>`).join('');
+    $('aMus').value = p.music?.file || '';
+    $('aMus').onchange = $('aMusOn').onchange = async () => { await saveP({ music: { ...S.p.music, file: $('aMus').value, enabled: $('aMusOn').checked, chosen_by_user: true } }); showRedo(); };
+    $('aMusPlay').onclick = () => { const a = $('aAud'); if (!a.paused) return a.pause(); a.src = `/api/music/file?name=${encodeURIComponent($('aMus').value)}`; a.play(); };
+    $('aCap').innerHTML = pres.map(x => `<option value="${x.id}">${esc(x.name)}</option>`).join('');
+    $('aCap').value = p.caption_preset;
+    $('aCap').onchange = async () => { await saveP({ caption_preset: $('aCap').value }); showRedo(); };
+    const M = S.p.motion || [];
+    const drawA = () => { $('aAnim').innerHTML = M.length ? M.map((g, i) => `<div class="item ${g.accepted ? 'acc' : g.accepted === false ? 'rej' : ''}"><span class="grow small">«${esc(g.text || g.name)}» на ${fmt(g.t)}</span>
+        <button class="btn sm ${g.accepted ? 'on' : ''}" data-y="${i}">✓</button><button class="btn sm ${g.accepted === false ? 'off' : ''}" data-n="${i}">✗</button></div>`).join('') : '<div class="small muted">В этом ролике анимации не понадобились.</div>';
+      $('aAnim').querySelectorAll('[data-y],[data-n]').forEach(b => b.onclick = async () => { const g = M[+(b.dataset.y ?? b.dataset.n)]; g.accepted = b.dataset.y != null; await saveP({ motion: M }); drawA(); showRedo(); }); };
+    drawA();
+    $('hRedo').onclick = () => start(false, true);
+  }
+  // шаг 1: добавить видео
+  const ensureProject = async () => { if (!S.pid) { const np = await api('/api/projects', { json: { title: 'Ролик ' + new Date().toLocaleDateString('ru') } }); await openProject(np.id); } };
+  const addFiles = async files => {
+    const vids = [...files].filter(f => /^video\//.test(f.type) || /\.(mp4|mov|m4v|mkv|webm|avi|mts)$/i.test(f.name));
+    if (!vids.length) return toast('Это не видео');
+    await ensureProject();
+    const list = [...(S.p.sources || [])];
+    for (const f of vids) {
+      try { const it = await uploadFile(f, k => { $('hUp').textContent = `Загружаю ${f.name}: ${Math.round(k * 100)}%`; });
+        list.push({ path: it.path, name: it.name, duration: it.duration, width: it.width, height: it.height }); }
+      catch (e) { toast(e.message); }
+    }
+    $('hUp').textContent = '';
+    await saveP({ sources: list }); pgHome();
+  };
+  $('hPick').onclick = () => $('hFile').click();
+  $('hFile').onchange = () => addFiles($('hFile').files);
+  const dz = $('hDrop');
+  dz.ondragover = e => { e.preventDefault(); dz.classList.add('over'); };
+  dz.ondragleave = () => dz.classList.remove('over');
+  dz.ondrop = e => { e.preventDefault(); dz.classList.remove('over'); addFiles(e.dataTransfer.files); };
+  document.body.ondragover = e => e.preventDefault(); document.body.ondrop = e => e.preventDefault();
+  main.querySelectorAll('[data-rm]').forEach(b => b.onclick = async () => { const l = [...S.p.sources]; l.splice(+b.dataset.rm, 1); await saveP({ sources: l }); pgHome(); });
+  // шаг 2: смонтировать (агенты)
+  const drawMini = () => { const a = AG?.state.agents || {};
+    if ($('hAg')) $('hAg').innerHTML = AGENTS.map(g => { const s = a[g.id]?.status || 'wait';
+      return `<div class="mini ${s}"><i style="background:${g.color}"></i><b>${g.name}</b><span>${s === 'done' ? '✓ готово' : s === 'work' ? 'работает…' : s === 'review' ? 'ждёт тебя' : s === 'error' ? 'ошибка' : ''}</span></div>`; }).join(''); };
+  const start = async final => {
+    stopAgentsView();
+    AG = { alive: true, state: await api(`/api/projects/${S.pid}/agents`), frames: [], wave: [], words: null, running: false,
+      onUpdate: drawMini, onBar: k => { const b = $('hBar'); if (!b) return; b.hidden = k == null; if (k != null) b.firstElementChild.style.width = `${k * 100}%`; },
+      onLine: (t, cls) => { if ($('hMsg')) { $('hMsg').textContent = t; $('hMsg').className = 'small ' + cls; } } };
+    if (!final) { await api(`/api/projects/${S.pid}/agents`, { json: { reset: true } }); AG.state = { agents: {}, log: [] }; }
+    drawMini();
+    if ($('hGo')) $('hGo').disabled = true; if ($('hFinal')) $('hFinal').disabled = true;
+    await runCommand(final ? 'финал' : 'смонтируй рилс');
+    stopAgentsView(); await openProject(S.pid); pgHome();
+  };
+  $('hGo').onclick = () => start(false);
+  $('hVoice').onclick = async () => {
+    let st = await api('/api/voice/status');
+    if (!st.has_key) {
+      const ok = await ask(`<h3 style="margin-top:0">Ключ ElevenLabs</h3><p class="small">Вставь API-ключ (elevenlabs.io → Profile → API Keys). Он хранится только на этом компьютере.</p>
+        <input type="password" id="vKey" style="width:100%" autocomplete="off">`, [['Отмена', false], ['Сохранить', true, 'primary']]);
+      if (!ok) return;
+      await api('/api/voice/key', { json: { key: document.getElementById('vKey').value } });
+      st = await api('/api/voice/status'); if (!st.has_key) return toast('Ключ не сохранился');
+    }
+    let voices;
+    try { voices = await api('/api/voice/voices'); } catch (e) { toast(e.message); if (/401|key|ключ/i.test(e.message)) await api('/api/voice/key', { json: { key: '' } }); return; }
+    const go_ = await ask(`<h3 style="margin-top:0">Озвучить текст</h3>
+      <select id="vVoice" style="width:100%">${voices.map(v => `<option value="${v.id}">${esc(v.name)}${v.labels?.gender ? ' · ' + esc(v.labels.gender) : ''}</option>`).join('')}</select>
+      <textarea id="vText" rows="5" style="margin-top:8px;font-family:inherit" placeholder="Текст для озвучки"></textarea>
+      <div class="row small" style="margin-top:6px">С какой секунды ролика: <input type="number" id="vT" value="0" step="0.5" style="width:80px"></div>`,
+      [['Отмена', false], ['Озвучить', true, 'primary']]);
+    if (!go_) return;
+    const vid = document.getElementById('vVoice').value, text = document.getElementById('vText').value, t = +document.getElementById('vT').value;
+    const v = voices.find(x => x.id === vid);
+    if (!text.trim()) return toast('Пустой текст');
+    try { $('hMsg').textContent = 'Озвучиваю…'; await pollJob(await api(`/api/projects/${S.pid}/voiceover`, { json: { text, voice_id: vid, voice_name: v?.name, t } }));
+      toast('Озвучка добавлена в ролик. Нажми «Смонтировать» или «Пересобрать черновик».'); pgHome(); }
+    catch (e) { toast(e.message); $('hMsg').textContent = ''; }
+  };
+  if ($('hFinal')) $('hFinal').onclick = () => start(true);
+  AG = { alive: true, state: p ? await api(`/api/projects/${S.pid}/agents`).catch(() => ({ agents: {} })) : { agents: {} } }; drawMini(); AG = null;
+}
+
 // ================================================================ старт
 (async () => {
-  const info = await api('/api/info').catch(() => ({}));
-  $('chips').innerHTML = [[info.gpu ? info.gpu.replace('NVIDIA GeForce ', '') : 'CPU', !!info.gpu], ['ffmpeg', info.ffmpeg], ['Captions Studio', info.captions], ['Моушн-студия', info.motion?.running], ['кит монтажа', info.kit]]
-    .map(([n, ok]) => `<span class="chip ${ok ? 'ok' : 'bad'}">${esc(n)}</span>`).join('');
   let pid = null; try { pid = localStorage.getItem('mt_pid'); } catch {}
   if (pid) { try { await openProject(pid); } catch { S.pid = null; } }
-  go('projects');
+  if (!S.pid) $('pname').textContent = '';
+  go('home');
+  const info = await api('/api/info').catch(() => ({}));
+  $('chips').innerHTML = [['ffmpeg', info.ffmpeg], ['Captions Studio', info.captions], ['кит монтажа', info.kit]]
+    .filter(([, ok]) => !ok).map(([n]) => `<span class="chip bad">нет: ${esc(n)}</span>`).join('');
 })();

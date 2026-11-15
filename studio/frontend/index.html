@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="ru">
 <head>
 <meta charset="utf-8">
@@ -14,16 +14,19 @@
 </header>
 <div class="layout">
   <nav class="side" id="nav">
-    <button data-page="projects"><span class="num">≡</span>Проекты</button>
-    <button data-page="agents"><span class="num">▶</span>Монтажка с агентами</button>
+    <button data-page="home"><span class="num">⌂</span>Главная</button>
+    <button data-page="projects"><span class="num">≡</span>Мои ролики</button>
     <div class="sep"></div>
-    <button data-page="sources"><span class="num">1</span>Исходники</button>
-    <button data-page="cleanup"><span class="num">2</span>Чистка</button>
-    <button data-page="montage"><span class="num">3</span>Монтаж</button>
-    <button data-page="render"><span class="num">4</span>Рендер</button>
-    <div class="sep"></div>
-    <button data-page="styles"><span class="num">★</span>Референсы и стили</button>
-    <button data-page="rules"><span class="num">✎</span>Мои правила</button>
+    <button id="moreBtn" class="more"><span class="num">…</span>Ещё</button>
+    <div id="moreBox" hidden>
+      <button data-page="agents"><span class="num">▶</span>Экран с агентами</button>
+      <button data-page="sources"><span class="num">1</span>Исходники</button>
+      <button data-page="cleanup"><span class="num">2</span>Чистка вручную</button>
+      <button data-page="montage"><span class="num">3</span>Монтаж вручную</button>
+      <button data-page="render"><span class="num">4</span>Рендер</button>
+      <button data-page="styles"><span class="num">★</span>Стили</button>
+      <button data-page="rules"><span class="num">✎</span>Мои правила</button>
+    </div>
   </nav>
   <main id="main"></main>
 </div>

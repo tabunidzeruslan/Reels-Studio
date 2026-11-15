@@ -325,6 +325,10 @@ def apply_cuts(pid: str):
         p["motion"] = [m for m in p.get("motion", []) if m.get("source") == "clip"] + \
             (compose.suggest_graphics(W) if P.get("graphics", True) else [])
         p["phrases_override"] = None
+        if p.get("music", {}).get("enabled", True) and not p.get("music", {}).get("chosen_by_user"):
+            f, why = compose.pick_music(W)
+            if f:
+                p["music"].update(file=f, why=why)
         projects.set_stage(p, "cleanup", "done"); projects.set_stage(p, "montage", "review", reset_after=True)
         projects.save(p)
         return {"ranges": len(ranges), "duration": round(sum(e - s for s, e in ranges), 2)}

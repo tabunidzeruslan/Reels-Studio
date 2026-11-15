@@ -82,7 +82,21 @@ def prepare(p: dict, pd: Path, job=None) -> dict:
             chains.append(f"[{i}:a]aresample=48000:async=1:first_pts=0,aformat=channel_layouts=stereo[a{i}]")
         else:
             chains.append(f"anullsrc=r=48000:cl=stereo,atrim=0:{info['duration']:.3f}[a{i}]")
-    chains.append("".join(f"[v{i}][a{i}]" for i in range(len(srcs))) + f"concat=n={len(srcs)}:v=1:a=1[v][a]")
+    durs = [cs.probe(s["path"])["duration"] for s in srcs]
+    if len(srcs) == 1:
+        chains.append("[v0]null[v];[a0]anull[a]")
+    else:
+        # переходы между клипами: плавный сдвиг кадра 0.35 с + кроссфейд звука (чередуем направление)
+        T = 0.35
+        trans = ["smoothleft", "smoothup", "fadeblack", "smoothright"]
+        vl, al, acc = "v0", "a0", durs[0]
+        for i in range(1, len(srcs)):
+            off = max(0.1, acc - T)
+            chains.append(f"[{vl}][v{i}]xfade=transition={trans[(i - 1) % len(trans)]}:duration={T}:offset={off:.3f}[vx{i}]")
+            chains.append(f"[{al}][a{i}]acrossfade=d={T}[ax{i}]")
+            vl, al = f"vx{i}", f"ax{i}"
+            acc += durs[i] - T
+        chains.append(f"[{vl}]null[v];[{al}]anull[a]")
     out = pd / "raw.mp4"
     run_progress(["ffmpeg", "-y", "-hide_banner", *inputs, "-filter_complex", ";".join(chains), "-map", "[v]", "-map", "[a]",
                   "-c:v", "libx264", "-preset", "veryfast", "-crf", "16", "-g", "30", "-pix_fmt", "yuv420p",
@@ -250,6 +264,30 @@ def music_list() -> list[dict]:
                 if f.suffix.lower() in {".mp3", ".wav", ".m4a", ".ogg"}:
                     out.append({"file": f.name, "path": str(f), "source": src})
     return out
+
+
+MOODS = {
+    "ambient_tech_90.mp3": ("нейросет", "ии", "claude", "chatgpt", "gpt", "код", "программ", "сайт", "приложен", "автоматиз", "технолог", "бот", "агент"),
+    "tense_b.mp3": ("ошибк", "проблем", "теряе", "стоп", "опасн", "никогда", "хватит", "срочно", "минус", "провал", "долг"),
+    "tense_c.mp3": ("деньг", "заработ", "доход", "миллион", "продаж", "клиент", "бизнес", "рост", "результат", "рубл", "доллар"),
+    "lofi_keys_84.mp3": ("жизн", "утро", "дом", "семь", "кофе", "спокой", "привычк", "отдых", "путешеств", "еда", "рецепт"),
+}
+
+
+def pick_music(words: list[dict]) -> tuple[str, str]:
+    """Музыка «в тему»: по словам ролика выбираем настроение из библиотеки (кит + Моушн-студия)."""
+    text = " ".join(w["text"].lower() for w in words)
+    have = {m["file"] for m in music_list()}
+    score = {f: sum(text.count(k) for k in ks) for f, ks in MOODS.items() if f in have}
+    if not score:
+        return (next(iter(have)) if have else ""), "единственный трек"
+    best = max(score, key=score.get)
+    if score[best] == 0:
+        best = "lofi_keys_84.mp3" if "lofi_keys_84.mp3" in have else best
+        return best, "спокойный фон по умолчанию"
+    why = {"ambient_tech_90.mp3": "про технологии", "tense_b.mp3": "про проблему/ошибку", "tense_c.mp3": "про деньги и рост",
+           "lofi_keys_84.mp3": "про жизнь и спокойные темы"}[best]
+    return best, why
 
 
 def _music_path(name: str) -> str | None:
