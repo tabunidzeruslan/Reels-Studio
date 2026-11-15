@@ -254,7 +254,7 @@ async function pgMontage() {
     <div class="montage"><div><div class="stage" id="stage"><video id="pv" src="/api/projects/${S.pid}/file/clean.mp4" preload="auto" playsinline></video>
         <div class="ov" id="ov"></div><canvas id="cv" width="1080" height="1920"></canvas><div class="safe" id="safe" hidden></div></div>
       <div class="ctrls"><button class="btn sm" id="play">▶</button><span class="small" id="tm">0:00.0</span><span class="grow"></span><label class="small"><input type="checkbox" id="safeT"> зона UI</label></div></div>
-    <div><div class="tabs" id="tabs"><button data-t="cap" class="active">Субтитры</button><button data-t="hook">Хук</button><button data-t="gfx">Графика</button><button data-t="mus">Музыка и стиль</button></div><div id="tab"></div></div></div>
+    <div><div class="tabs" id="tabs"><button data-t="cap" class="active">Субтитры</button><button data-t="hook">Хук</button><button data-t="gfx">Графика</button><button data-t="mus">Музыка и стиль</button><button data-t="vo">Голос</button></div><div id="tab"></div></div></div>
     <canvas id="timeline"></canvas><div class="hint">Дорожки: видео (розовый — хук, фиолетовый — punch-in), субтитры, моушн (зелёный — принято, жёлтый — предложено), музыка.</div></div>`;
   const fx = (await fetch(`/api/projects/${S.pid}/file/face.json`).then(r => r.json()).catch(() => ({ cx: .5, cy: .4 })));
   $('pv').style.setProperty('--fx', `${fx.cx * 100}%`); $('pv').style.setProperty('--fy', `${fx.cy * 100}%`);
@@ -332,6 +332,41 @@ async function pgMontage() {
         M.push({ id: Math.random().toString(36).slice(2, 10), kind: $('addKind').value, text: $('addText').value.trim().toUpperCase(), t: +nowClean().toFixed(2), dur: 1.8, y: 0.2, source: 'card', accepted: true }); upd(); drawTab(); };
       $('addClip').onclick = () => { const c = S.lib[+$('clip').value]; if (!c) return;
         M.push({ id: Math.random().toString(36).slice(2, 10), kind: 'clip', name: c.name, file: c.file, mode: c.mode, t: +nowClean().toFixed(2), dur: Math.min(c.duration || 2, 4), y: 0.3, source: 'clip', accepted: true }); upd(); drawTab(); };
+    } else if (tab === 'vo') {
+      el.innerHTML = '<p class="muted">Проверяю ElevenLabs…</p>';
+      (async () => {
+        const st = await api('/api/voice/status');
+        const V = S.p.voiceovers || [];
+        if (!st.has_key) {
+          el.innerHTML = `<p class="hint">Озвучка текста голосом ElevenLabs (по желанию). Вставьте API-ключ своего аккаунта: elevenlabs.io → Profile → API Keys. Ключ хранится только на этом ПК (studio\\settings.json), в репозиторий не попадает.</p>
+            <div class="row"><input type="password" id="elKey" class="grow" placeholder="ключ ElevenLabs" autocomplete="off"><button class="btn primary" id="elSave">Сохранить ключ</button></div>`;
+          $('elSave').onclick = async () => { await api('/api/voice/key', { json: { key: $('elKey').value } }); $('elKey').value = ''; drawTab(); };
+          return;
+        }
+        let voices = [];
+        try { voices = await api('/api/voice/voices'); } catch (e) { el.innerHTML = `<p style="color:var(--danger)">${esc(e.message)}</p><button class="btn sm" id="elReset">Сменить ключ</button>`; $('elReset').onclick = async () => { await api('/api/voice/key', { json: { key: '' } }); drawTab(); }; return; }
+        el.innerHTML = `<p class="hint">Текст озвучивается выбранным голосом и ложится на дорожку «Голос» с указанного времени (секунды ролика без хука). Музыка приглушается и под озвучку.</p>
+          <div class="row"><select id="elVoice" class="grow">${voices.map(v => `<option value="${v.id}">${esc(v.name)}${v.labels?.gender ? ' · ' + esc(v.labels.gender) : ''}${v.category ? ' · ' + esc(v.category) : ''}</option>`).join('')}</select>
+            <button class="btn sm" id="elPrev">▶ образец</button><label class="small">с <input type="number" id="elT" step="0.1" style="width:70px" value="${Math.max(0, player.time() - hookLen()).toFixed(1)}"> с</label></div>
+          <textarea id="elText" rows="3" style="margin-top:8px;font-family:inherit" placeholder="Текст для озвучки"></textarea>
+          <div class="row" style="margin-top:8px"><button class="btn primary" id="elGo">Озвучить</button><span id="elJob" class="grow"></span><button class="btn sm" id="elReset">Сменить ключ</button></div>
+          <div class="list" style="margin-top:12px">${V.map((v, i) => `<div class="item" data-i="${i}"><span class="tag">${fmt(v.t)}</span><span class="grow small">${esc(v.text.slice(0, 70))} <span class="muted">· ${esc(v.voice)} · ${v.duration} с</span></span>
+            <input type="number" data-k="t" step="0.1" style="width:66px" value="${v.t}"><input type="number" data-k="volume" step="0.1" min="0" max="2" style="width:56px" value="${v.volume}">
+            <button class="btn sm" data-a="play">▶</button><button class="btn sm no" data-a="del">✕</button></div>`).join('') || '<p class="muted small">Озвучек пока нет.</p>'}</div><audio id="elAud"></audio>`;
+        const aud = $('elAud');
+        $('elPrev').onclick = () => { const v = voices.find(x => x.id === $('elVoice').value); if (v?.preview) { aud.src = v.preview; aud.play(); } };
+        $('elReset').onclick = async () => { await api('/api/voice/key', { json: { key: '' } }); drawTab(); };
+        $('elGo').onclick = async () => {
+          const v = voices.find(x => x.id === $('elVoice').value);
+          try { await pollJob(await api(`/api/projects/${S.pid}/voiceover`, { json: { text: $('elText').value, voice_id: v.id, voice_name: v.name, t: +$('elT').value } }), $('elJob'));
+            S.p = await api(`/api/projects/${S.pid}`); drawTab(); toast('Озвучка добавлена на дорожку «Голос»'); } catch (e) { toast(e.message); }
+        };
+        el.querySelectorAll('.item').forEach(row => { const v = V[+row.dataset.i];
+          row.querySelectorAll('input').forEach(inp => inp.onchange = () => { v[inp.dataset.k] = +inp.value; changed({ voiceovers: V }, false); });
+          row.querySelector('[data-a=play]').onclick = () => { aud.src = media(v.file); aud.play(); };
+          row.querySelector('[data-a=del]').onclick = async () => { V.splice(+row.dataset.i, 1); await changed({ voiceovers: V }, false); drawTab(); };
+        });
+      })();
     } else {
       el.innerHTML = `<div class="row"><label class="small">Стиль монтажа</label><select id="sty">${S.styles.map(s => `<option value="${s.name}">${esc(s.title || s.name)}</option>`).join('')}</select></div>
         <div class="row" style="margin-top:10px"><label><input type="checkbox" id="men"> Музыка</label><select id="mf">${S.music.map(m => `<option value="${esc(m.file)}">${esc(m.file)} (${m.source === 'kit' ? 'кит' : 'моушн-студия'})</option>`).join('')}</select>
@@ -817,6 +852,8 @@ function drawTimeline2() {
   // голос
   const wv = AG.wave; if (wv.length) { c.fillStyle = '#c86bff'; const step = (Wd - L - 10) / wv.length;
     wv.forEach((v, i) => { const hh = Math.max(1, v * h); c.fillRect(L + i * step, y(3) + (h - hh) / 2, Math.max(1, step - 0.5), hh); }); }
+  for (const v of S.p.voiceovers || []) { c.fillStyle = '#ffb02066'; c.fillRect(X(v.t), y(3), Math.max(4, X(v.t + v.duration) - X(v.t)), h);
+    c.fillStyle = '#fff'; c.fillText('🎙 ' + v.text.slice(0, 18), X(v.t) + 3, y(3) + h / 2 + 4); }
   // звук: щелчки на графике и хуке
   if (['work', 'done'].includes(ag.sound?.status)) { c.fillStyle = '#ffb020';
     for (const g of (S.p.motion || []).filter(g => g.accepted)) { c.beginPath(); c.arc(X(g.t), y(4) + h / 2, 4, 0, 7); c.fill(); }

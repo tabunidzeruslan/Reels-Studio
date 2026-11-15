@@ -10,7 +10,7 @@ from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import analyze_style, compose, cs, find_cuts, motion, projects, render, rules, sources, transcribe
+from . import analyze_style, compose, cs, find_cuts, motion, projects, render, rules, sources, transcribe, voice
 from .config import CAPTIONS_DIR, FRONTEND, KIT_DIR, OUTPUT, WORK
 from .ff import jdump, jload
 
@@ -144,7 +144,7 @@ def get_project(pid: str):
 def put_project(pid: str, body: dict = Body(...)):
     p = projects.load(pid)
     for k in ("title", "sources", "lang", "style", "caption_preset", "caption_style", "hook", "motion", "punch", "music",
-              "sfx", "phrases_override", "edits"):
+              "sfx", "phrases_override", "edits", "voiceovers"):
         if k in body:
             p[k] = body[k]
     if "sources" in body:
@@ -154,7 +154,7 @@ def put_project(pid: str, body: dict = Body(...)):
         projects.set_stage(p, "sources", "done" if p["sources"] else "todo", reset_after=True)
     if "edits" in body:
         projects.set_stage(p, "cleanup", "review", reset_after=True)
-    if any(k in body for k in ("hook", "motion", "punch", "music", "caption_preset", "phrases_override")):
+    if any(k in body for k in ("hook", "motion", "punch", "music", "caption_preset", "phrases_override", "voiceovers")):
         projects.set_stage(p, "montage", "review", reset_after=True)
     return projects.save(p)
 
@@ -275,6 +275,42 @@ def card(pid: str, gid: str):
         raise FileNotFoundError(gid)
     d = projects.pdir(pid) / "cards"; d.mkdir(exist_ok=True)
     return FileResponse(compose.render_card(g, d / f"{gid}.png"), headers={"Cache-Control": "no-store"})
+
+
+# ---------------------------------------------------------------- голос ElevenLabs (по желанию)
+@app.get("/api/voice/status")
+def voice_status():
+    return voice.status()
+
+
+@app.post("/api/voice/key")
+def voice_key(body: dict = Body(...)):
+    voice.set_key(body.get("key", ""))
+    return voice.status()
+
+
+@app.get("/api/voice/voices")
+def voice_list():
+    return voice.voices()
+
+
+@app.post("/api/projects/{pid}/voiceover")
+def voiceover(pid: str, body: dict = Body(...)):
+    """Озвучить текст и положить на дорожку «Голос» с момента t (секунды ролика без хука)."""
+    text, vid = body["text"].strip(), body["voice_id"]
+    if not text:
+        raise ValueError("Пустой текст")
+
+    def work(job):
+        f = voice.tts(text, vid, projects.pdir(pid) / "vo", body.get("model", "eleven_multilingual_v2"), job)
+        p = projects.load(pid)
+        item = {"id": f.stem, "file": str(f), "t": float(body.get("t", 0)), "text": text, "voice": body.get("voice_name", vid),
+                "volume": float(body.get("volume", 1.0)), "duration": round(compose.dur_of(str(f)), 2)}
+        p.setdefault("voiceovers", []).append(item)
+        projects.set_stage(p, "montage", "review", reset_after=True)
+        projects.save(p)
+        return item
+    return cs.start_job("voice", work).public()
 
 
 # ---------------------------------------------------------------- монтажка с агентами

@@ -1,4 +1,4 @@
-"""Монтаж: подготовка исходников (кроп по лицу, 1080×1920), хук, punch-in, графика на словах, музыка и звуки.
+﻿"""Монтаж: подготовка исходников (кроп по лицу, 1080×1920), хук, punch-in, графика на словах, музыка и звуки.
 
 Правила по мотивам reels-montage-kit (beat-planning, move-bank, sound-design): сильная фраза — в начало, на каждой
 смене мысли punch-in 1.1–1.2×, чтобы спрятать джамп-кат, графика ставится ровно на слово и живёт 1.2–2 с, не чаще
@@ -295,7 +295,7 @@ def build(p: dict, pd: Path, words: list[dict], P: dict, final: bool, job=None) 
         f = min(0.02, L / 4)
         ch.append(f"[0:a]atrim=start={pc['start']:.3f}:end={pc['end']:.3f},asetpts=PTS-STARTPTS,"
                   f"afade=t=in:d={f:.3f},afade=t=out:st={L - f:.3f}:d={f:.3f}[pa{i}]")
-    ch.append("".join(f"[pv{i}][pa{i}]" for i in range(len(pieces))) + f"concat=n={len(pieces)}:v=1:a=1[vc][voice]")
+    ch.append("".join(f"[pv{i}][pa{i}]" for i in range(len(pieces))) + f"concat=n={len(pieces)}:v=1:a=1[vc][voice0]")
     total = sum(pc["end"] - pc["start"] for pc in pieces)
 
     # ---- графика
@@ -334,6 +334,20 @@ def build(p: dict, pd: Path, words: list[dict], P: dict, final: bool, job=None) 
                 ch.append(f"[{last}][g{k}]overlay=x=(W-w)/2:y={Y:.0f}-h/2:eof_action=pass[o{k}]")
             sfx_events.append((T, "whoosh"))
         last = f"o{k}"; nin += 1
+
+    # ---- озвучка ElevenLabs: подмешиваем к голосу до ducking (музыка приглушается и под неё)
+    vos = [v for v in p.get("voiceovers", []) if v.get("enabled", True) and Path(v["file"]).exists()]
+    if vos:
+        labs = []
+        for j, v in enumerate(vos):
+            inputs += ["-i", v["file"]]
+            ms = int(max(0.0, v["t"] + hook_len) * 1000)
+            ch.append(f"[{nin}:a]aresample=48000,aformat=channel_layouts=stereo,volume={float(v.get('volume', 1)):.2f},"
+                      f"adelay={ms}|{ms}[vo{j}]")
+            labs.append(f"[vo{j}]"); nin += 1
+        ch.append("[voice0]" + "".join(labs) + f"amix=inputs={len(labs) + 1}:normalize=0:duration=first[voice]")
+    else:
+        ch.append("[voice0]anull[voice]")
 
     # ---- звук: голос + музыка с ducking + sfx, итог -14 LUFS
     amix_in = []
