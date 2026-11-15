@@ -1,0 +1,19 @@
+# окружения и кэш
+studio/.venv/
+__pycache__/
+*.pyc
+# временное и результаты
+work/
+output/
+# локальные настройки (пути к папкам на диске)
+studio/settings.json
+# медиа
+*.mp4
+*.mov
+*.webm
+*.wav
+*.mp3
+# скиллы и служебное Claude
+.agents/
+.claude/
+skills-lock.json
